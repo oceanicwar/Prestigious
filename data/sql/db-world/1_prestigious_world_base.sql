@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS `prestige_rewards` (
 
 DELETE FROM `prestige_rewards`;
 INSERT INTO `prestige_rewards` (`entry`, `count`, `scalable`, `prestige`, `comment`) VALUES
-	(37742, 5, 1, 0, 'Prestige Coin');
+	(37742, 100, 1, 0, 'Prestige Coin');
 
 CREATE TABLE IF NOT EXISTS `prestige_whitelist_quest` (
   `quest_id` int NOT NULL,
