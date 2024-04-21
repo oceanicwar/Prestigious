@@ -325,6 +325,15 @@ void PrestigeHandler::ResetSpells(Player* player)
             }
         }
 
+        // Don't unlearn pets
+        if (!sConfigMgr->GetOption<bool>("Prestigious.Unlearn.NonCombatPet", false))
+        {
+            if (IsNonCombatPet(spellId))
+            {
+                continue;
+            }
+        }
+
         player->removeSpell(spellId, SPEC_MASK_ALL, false);
     }
 
@@ -852,6 +861,40 @@ bool PrestigeHandler::IsMount(uint32 spellId)
 
     auto effect = spellInfo->Effects[0];
     if (effect.ApplyAuraName != SPELL_AURA_MOUNTED)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool PrestigeHandler::IsNonCombatPet(uint32 spellId)
+{
+    auto spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo)
+    {
+        return false;
+    }
+
+    auto effect = spellInfo->Effects[0];
+    if (effect.Effect != SPELL_EFFECT_SUMMON)
+    {
+        return false;
+    }
+
+    int32 creature = effect.MiscValue;
+    if (creature <= 0)
+    {
+        return false;
+    }
+
+    auto cProto = sObjectMgr->GetCreatureTemplate(uint32(creature));
+    if (!cProto)
+    {
+        return false;
+    }
+
+    if (cProto->type != CREATURE_TYPE_NON_COMBAT_PET)
     {
         return false;
     }
@@ -1615,6 +1658,27 @@ void PrestigeHandler::QueueResetDesummonPets(Player* player)
 
 void PrestigeHandler::QueueResetComplete(Player* player, PrestigeState* state)
 {
+    if (state->IsSacrifice)
+    {
+        SacrificeRewardPlayer(player, state->AvgItemLevel);
+
+        if (sConfigMgr->GetOption<bool>("Prestigious.Debug", false))
+        {
+            LOG_INFO("module", "Rewarded player '{}' for sacrificing gear during prestige.", player->GetName());
+        }
+    }
+    else
+    {
+        auto multiplier = GetBaseMultiplier(player->getClass() == CLASS_DEATH_KNIGHT);
+
+        RewardPlayer(player, multiplier);
+
+        if (sConfigMgr->GetOption<bool>("Prestigious.Debug", false))
+        {
+            LOG_INFO("module", "Rewarded player '{}' for prestiging.", player->GetName());
+        }
+    }
+
     player->SaveToDB(false, false);
 
     if (sConfigMgr->GetOption<bool>("Prestigious.Announcement", true))
