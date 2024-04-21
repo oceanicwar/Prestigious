@@ -277,14 +277,13 @@ void PrestigeHandler::DoPrestige(Player* player, bool sacrificeArmor)
 
     ResetQuests(player);
 
+    uint32 avgLevel = player->GetAverageItemLevel();
+
     // There are internal checks inside IterateItems for deleting/flagging items.
     IterateItems(player, sacrificeArmor);
 
-    uint32 avgLevel = 0;
-
     if (sacrificeArmor)
     {
-        avgLevel = player->GetAverageItemLevel();
         SacrificeRewardPlayer(player, avgLevel);
 
         if (sConfigMgr->GetOption<bool>("Prestigious.Debug", false))
@@ -304,8 +303,6 @@ void PrestigeHandler::DoPrestige(Player* player, bool sacrificeArmor)
         }
     }
 
-    EquipDefaultItems(player);
-
     UnlearnAllSpells(player);
     ResetSkills(player);
 
@@ -317,16 +314,7 @@ void PrestigeHandler::DoPrestige(Player* player, bool sacrificeArmor)
         ResetActionbar(player);
     }
 
-    ResetLevel(player);
-
-    if (sacrificeArmor)
-    {
-        player->SetFlag(PLAYER_FLAGS, PLAYER_FLAGS_UNK31);
-    }
-
-    ResetHomebindAndPosition(player);
-
-    player->SaveToDB(false, false);
+    QueuePrestige(player, QueueReason::QUEUE_RESET_LEVEL);
 
     if (sConfigMgr->GetOption<bool>("Prestigious.Announcement", true))
     {
@@ -335,7 +323,6 @@ void PrestigeHandler::DoPrestige(Player* player, bool sacrificeArmor)
             Acore::StringFormatFmt("|cffFFFFFFPlayer |cff00FF00{} |cffFFFFFFhas prestiged to prestige level |cff00FF00{}!|r", player->GetName(), sPrestigeHandler->GetPrestigeLevel(player));
 
         sWorld->SendServerMessage(SERVER_MSG_STRING, message);
-        player->SendSystemMessage(message);
     }
 }
 
@@ -666,28 +653,25 @@ void PrestigeHandler::ResetActionbar(Player* player)
     // TODO: If a player is lagging this may cause problems, maybe schedule even longer.
     auto scheduleDelay = player->GetSession()->GetLatency() * 2;
 
-    // Schedule the new actions the future to fix actions being deleted by client
-    scheduler.Schedule(1000ms + std::chrono::milliseconds(scheduleDelay), [player, pInfo](TaskContext /*context*/) {
-        if (!player || !pInfo)
+    if (!player || !pInfo)
+    {
+        return;
+    }
+
+    // Repopulate actionbar
+    for (auto it = pInfo->action.begin(); it != pInfo->action.end(); ++it)
+    {
+        auto actionButton = player->addActionButton(it->button, it->action, it->type);
+        if (!actionButton)
         {
-            return;
+            continue;
         }
 
-        // Repopulate actionbar
-        for (auto it = pInfo->action.begin(); it != pInfo->action.end(); ++it)
-        {
-            auto actionButton = player->addActionButton(it->button, it->action, it->type);
-            if (!actionButton)
-            {
-                continue;
-            }
+        actionButton->uState = ACTIONBUTTON_NEW;
+    }
 
-            actionButton->uState = ACTIONBUTTON_NEW;
-        }
-
-        // Send new actions to client
-        player->SendActionButtons(1);
-    });
+    // Send new actions to client
+    player->SendActionButtons(1);
 }
 
 void PrestigeHandler::IterateItems(Player* player, bool deleteEquipped)
@@ -1021,6 +1005,29 @@ bool PrestigeHandler::IsHeirloom(Item* item)
     }
 
     return itemProto->Quality == ITEM_QUALITY_HEIRLOOM;
+}
+
+bool PrestigeHandler::HasItemsEquipped(Player* player)
+{
+    if (!player)
+    {
+        return false;
+    }
+
+    bool hasEquipped = false;
+
+    for (uint32 i = 0; i < INVENTORY_SLOT_BAG_START; ++i)
+    {
+        auto item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i);
+        if (!item)
+        {
+            continue;
+        }
+
+        hasEquipped = true;
+    }
+
+    return hasEquipped;
 }
 
 void PrestigeHandler::RewardPlayer(Player* player, float multiplier)
@@ -1466,24 +1473,24 @@ void PrestigeHandler::LoadItemLevelBrackets()
 
     auto qResult = WorldDatabase.Query("SELECT * FROM `prestige_sacrifice_brackets` ORDER BY itemlevel ASC");
 
-    if (!qResult)
-    {
-        return;
-    }
+if (!qResult)
+{
+    return;
+}
 
-    itemLevelBrackets.clear();
+itemLevelBrackets.clear();
 
-    do
-    {
-        auto fields = qResult->Fetch();
+do
+{
+    auto fields = qResult->Fetch();
 
-        uint32 itemLevel = fields[0].Get<uint32>();
-        uint32 multiplier = fields[1].Get<float>();
+    uint32 itemLevel = fields[0].Get<uint32>();
+    uint32 multiplier = fields[1].Get<float>();
 
-        itemLevelBrackets.emplace(itemLevel, multiplier);
-    } while (qResult->NextRow());
+    itemLevelBrackets.emplace(itemLevel, multiplier);
+} while (qResult->NextRow());
 
-    LOG_INFO("module", ">> Loaded '{}' item level brackets.", itemLevelBrackets.size());
+LOG_INFO("module", ">> Loaded '{}' item level brackets.", itemLevelBrackets.size());
 }
 
 float PrestigeHandler::GetBaseMultiplier(bool isDeathKnight)
@@ -1491,6 +1498,102 @@ float PrestigeHandler::GetBaseMultiplier(bool isDeathKnight)
     return isDeathKnight ?
         sConfigMgr->GetOption<float>("Prestigious.Reward.Multiplier.Base.DeathKnight", 0.5f) :
         sConfigMgr->GetOption<float>("Prestigious.Reward.Multiplier.Base", 1.0f);
+}
+
+void PrestigeHandler::QueuePrestige(Player* player, QueueReason reason)
+{
+    if (!player)
+    {
+        return;
+    }
+
+    auto it = prestigeQueue.find(player);
+    if (it != prestigeQueue.end())
+    {
+        it->second = reason;
+        return;
+    }
+
+    prestigeQueue.emplace(player, reason);
+}
+
+void PrestigeHandler::DequeuePrestige(Player* player)
+{
+    if (!player)
+    {
+        return;
+    }
+
+    auto it = prestigeQueue.find(player);
+    if (it == prestigeQueue.end())
+    {
+        return;
+    }
+
+    prestigeQueue.erase(it);
+}
+
+void PrestigeHandler::HandleQueue()
+{
+    if (prestigeQueue.empty())
+    {
+        return;
+    }
+
+    std::vector<Player*> playersToDequeue;
+
+    for (auto item : prestigeQueue)
+    {
+        Player* player = item.first;
+        QueueReason reason = item.second;
+
+        if (!player)
+        {
+            continue;
+        }
+
+        switch (reason)
+        {
+        case QueueReason::QUEUE_RESET_LEVEL:
+            if (HasItemsEquipped(player))
+            {
+                return;
+            }
+
+            ResetLevel(player);
+
+            QueuePrestige(player, QueueReason::QUEUE_EQUIP_NEW_ITEMS);
+            break;
+
+        case QueueReason::QUEUE_EQUIP_NEW_ITEMS:
+            EquipDefaultItems(player);
+
+            QueuePrestige(player, QueueReason::QUEUE_TELEPORT_PLAYER);
+            break;
+
+        case QueueReason::QUEUE_TELEPORT_PLAYER:
+            if (!HasItemsEquipped(player))
+            {
+                return;
+            }
+
+            ResetHomebindAndPosition(player);
+
+            QueuePrestige(player, QueueReason::QUEUE_DONE);
+            break;
+
+        case QueueReason::QUEUE_DONE:
+            player->SaveToDB(false, false);
+            playersToDequeue.push_back(player);
+            break;
+        }
+    }
+
+    // Clean completed players
+    for(auto player : playersToDequeue)
+    {
+        DequeuePrestige(player);
+    }
 }
 
 bool PrestigeHandler::UnequipItems(Player* player)
