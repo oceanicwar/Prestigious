@@ -32,7 +32,7 @@ PrestigeHandler::PrestigeHandler()
         racialMap.emplace(RACE_NIGHTELF, std::unordered_set<uint32>{
             21009, // Elusiveness
             20583, // Nature Resistance
-            20583, // Quickness
+            20582, // Quickness
             58984, // Shadowmeld
             20585, // Wisp Spirit
 
@@ -274,6 +274,7 @@ void PrestigeHandler::ResetLevel(Player* player)
     uint32 level = isHeroClass ? 55 : 1;
 
     player->SetLevel(level, true);
+    player->SetUInt32Value(PLAYER_XP, 0);
     player->InitStatsForLevel(true);
 
     if (sConfigMgr->GetOption<bool>("Prestigious.Debug", false))
@@ -335,11 +336,38 @@ void PrestigeHandler::ResetSpells(Player* player)
         }
 
         player->removeSpell(spellId, SPEC_MASK_ALL, false);
+        player->SendLearnPacket(spellId, false);
     }
 
     if (sConfigMgr->GetOption<bool>("Prestigious.Debug", false))
     {
         LOG_INFO("module", "Prestige> Player spells unlearned.");
+    }
+}
+
+void PrestigeHandler::ResendRankedSpells(Player* player)
+{
+    // When removing ranked spells, we need to re-send the learn packet to the client
+    // so they know they have the lower ranked spells.
+    for (auto& spell : player->GetSpellMap())
+    {
+        uint32 spellId = spell.first;
+        auto spellState = spell.second;
+        auto spellInfo = sSpellMgr->GetSpellInfo(spellId);
+
+        if (!spellInfo ||
+            !spellState)
+        {
+            continue;
+        }
+
+        if (!spellInfo->IsRanked() ||
+            spellState->State == PLAYERSPELL_REMOVED)
+        {
+            continue;
+        }
+
+        player->SendLearnPacket(spellId, true);
     }
 }
 
@@ -384,7 +412,7 @@ void PrestigeHandler::ResetSkills(Player* player)
             continue;
         }
 
-        player->SetSkill(skill, 1, 1, player->GetMaxSkillValueForLevel());
+        player->SetSkill(skill, 1, player->getClass() == CLASS_DEATH_KNIGHT ? 270 : 1, player->GetMaxSkillValueForLevel());
     }
 }
 
@@ -925,6 +953,48 @@ bool PrestigeHandler::HasItemsEquipped(Player* player)
     return hasEquipped;
 }
 
+bool PrestigeHandler::HasNonStarterSpells(Player* player)
+{
+    auto spells = player->GetSpellMap();
+
+    for (auto& spell : spells)
+    {
+        uint32 spellId = spell.first;
+        auto spellState = spell.second;
+
+        if (!spellState)
+        {
+            continue;
+        }
+
+        if (IsRacialSpell(player->getRace(), spellId) ||
+            IsClassStarterSpell(player->getClass(), spellId))
+        {
+            continue;
+        }
+
+        if (spellState->State == PLAYERSPELL_REMOVED ||
+            spellState->State == PLAYERSPELL_TEMPORARY)
+        {
+            continue;
+        }
+
+        bool isInSpec = spellState->IsInSpec(player->GetActiveSpec());
+
+        if (!spellState->Active ||
+            !isInSpec)
+        {
+            continue;
+        }
+
+        LOG_INFO("module", "non-started spell found {} in spec {} player specmask {} spell specmask {}", spellId, isInSpec, player->GetActiveSpec(), uint32(spellState->specMask));
+
+        return true;
+    }
+
+    return false;
+}
+
 void PrestigeHandler::RewardPlayer(Player* player, float multiplier)
 {
     auto prestigeLevel = GetPrestigeLevel(player);
@@ -1457,7 +1527,11 @@ void PrestigeHandler::HandleQueue()
         Player* player = item.first;
         PrestigeState* state = &item.second;
 
-        if (!player)
+        if (!player ||
+            !player->IsInWorld() ||
+            player->IsBeingTeleported() ||
+            !player->GetSession() ||
+            player->GetSession()->IsKicked())
         {
             continue;
         }
@@ -1486,6 +1560,10 @@ void PrestigeHandler::HandleQueue()
 
         case QueueState::QUEUE_RESET_SPELLS:
             QueueResetSpells(player);
+            break;
+
+        case QueueState::QUEUE_RESET_RESEND_SPELLS:
+            QueueResetResendSpells(player);
             break;
 
         case QueueState::QUEUE_RESET_SKILLS:
@@ -1617,11 +1695,24 @@ void PrestigeHandler::QueueResetSpells(Player* player)
 
     ResetSpells(player);
 
+    UpdateQueueState(player, QueueState::QUEUE_RESET_RESEND_SPELLS);
+}
+
+void PrestigeHandler::QueueResetResendSpells(Player* player)
+{
+    ResendRankedSpells(player);
+
     UpdateQueueState(player, QueueState::QUEUE_RESET_SKILLS);
 }
 
 void PrestigeHandler::QueueResetSkills(Player* player)
 {
+    // Wait for all spells to be unlearned
+    if (HasNonStarterSpells(player))
+    {
+        return;
+    }
+
     ResetSkills(player);
 
     UpdateQueueState(player, QueueState::QUEUE_RESET_ACTIONS);

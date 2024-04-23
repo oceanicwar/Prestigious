@@ -41,6 +41,7 @@ public:
         QUEUE_RESET_EQUIP_NEW_ITEMS,
         QUEUE_RESET_TELEPORT,
         QUEUE_RESET_SPELLS,
+        QUEUE_RESET_RESEND_SPELLS,
         QUEUE_RESET_SKILLS,
         QUEUE_RESET_ACTIONS,
         QUEUE_RESET_ACTIONBAR,
@@ -67,6 +68,7 @@ public:
     void ResetActionbar(Player* /*player*/);
 
     void ResetSpells(Player* /*player*/);
+    void ResendRankedSpells(Player* /*player*/);
     void ResetSkills(Player* /*player*/);
     void DesummonMinion(Player* /*player*/);
     void DesummonPet(Player* /*player*/);
@@ -85,6 +87,7 @@ public:
     bool IsNonCombatPet(uint32 /*spellId*/);
 
     bool HasItemsEquipped(Player* /*player*/);
+    bool HasNonStarterSpells(Player* /*player*/);
 
     void RewardPlayer(Player* /*player*/, float /*multiplier*/);
     void SacrificeRewardPlayer(Player* /*player*/, uint32 /*avgLevel*/);
@@ -119,6 +122,7 @@ public:
     void QueueResetNewEquipment(Player* /*player*/);
     void QueueResetHomebindAndPosition(Player* /*player*/);
     void QueueResetSpells(Player* /*player*/);
+    void QueueResetResendSpells(Player* /*player*/);
     void QueueResetSkills(Player* /*player*/);
     void QueueResetActions(Player* /*player*/);
     void QueueResetActionBar(Player* /*player*/);
