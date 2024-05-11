@@ -86,6 +86,8 @@ public:
     bool IsHeirloom(Item* /*item*/);
     bool IsMount(uint32 /*spellId*/);
     bool IsNonCombatPet(uint32 /*spellId*/);
+    bool IsStarterAmmo(uint32 /*itemId*/);
+    bool IsRidingSpell(uint32 /*spellId*/);
 
     bool HasItemsEquipped(Player* /*player*/);
     bool HasNonStarterSpells(Player* /*player*/);
